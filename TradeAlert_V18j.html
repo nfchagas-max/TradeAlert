@@ -888,15 +888,15 @@ function fetchQuote(ticker, cb){
   });
 }
 
-// OHLC histórico via Worker (Finnhub candles 1H)
+// OHLC histórico via Worker (type=ohlc — confirmado funcionando)
 function fetchOHLC1h(ticker, cb){
   var fs = fhSym(ticker);
-  workerFetch({type:"candle",sym:fs},function(d){
-    if(!d||d.s==="no_data"||!d.c||d.c.length<10){cb(null);return;}
-    var closes=d.c,highs=d.h,lows=d.l,vols=d.v||[];
+  workerFetch({type:"ohlc",sym:fs},function(d){
+    if(!d||!d.c||d.c.length<10){cb(null);return;}
+    var closes=d.c,highs=d.h||d.c,lows=d.l||d.c,vols=d.v||[];
     var last=closes[closes.length-1],prev=closes[closes.length-2]||last;
     cb({closes:closes,highs:highs,lows:lows,vols:vols,
-        price:last,changePct:(last-prev)/prev*100});
+        price:d.price||last,changePct:d.changePct||((last-prev)/prev*100)});
   });
 }
 
