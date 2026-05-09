@@ -151,8 +151,8 @@ body{background:var(--bg);color:var(--txt);font-family:var(--disp);min-height:10
 
 <div class="hdr">
   <div>
-    <div class="logo">Trade<span>Alert</span><span class="logo-v">V18i</span></div>
-    <div style="font-size:7px;color:var(--tx3);font-family:var(--mono);margin-top:1px">5 PENTAGRAMAS · VOLUME · ALERTA MAXIMO</div>
+    <div class="logo">Trade<span>Alert</span><span class="logo-v">V18d</span></div>
+    <div style="font-size:7px;color:var(--tx3);font-family:var(--mono);margin-top:1px">5 PENTAGRAMAS · CLOUDFLARE WORKER · ALERTA MAXIMO</div>
   </div>
   <div class="hdr-r">
     <button class="ibtn" onclick="refresh()">&#8635;</button>
@@ -261,7 +261,7 @@ body{background:var(--bg);color:var(--txt);font-family:var(--disp);min-height:10
       <strong style="color:var(--grn)">VERDE</strong> = COMPRA (banda inferior / RSI sobrevendido / MACD positivo)<br>
       <strong style="color:var(--red)">VERMELHO</strong> = VENDA (banda superior / RSI sobrecomprado / MACD negativo)<br>
       <strong style="color:var(--yel)">Cada vertice = 1 TF: 1H &rarr; 4H &rarr; 12H &rarr; 1D &rarr; 3D</strong><br>
-      <strong style="color:var(--acc)">Cripto via Binance · Acoes/Forex via Twelve Data</strong>
+      <strong style="color:var(--acc)">Cripto via Binance · Acoes/ETFs via Cloudflare Worker</strong>
     </div>
     <button class="abtn" onclick="reqNotif()">Ativar Notificacoes Push</button>
     <button class="abtn pri" onclick="saveCfg()">Salvar Configuracoes</button>
@@ -311,6 +311,24 @@ var TF_WIN   = {  "1h":60,"4h":60,"12h":60,"1d":60, "3d":40  };
 // ============================================================
 // ASSETS
 // ============================================================
+// FINNHUB_MAP — símbolos corretos para Finnhub API
+// Finnhub usa formato diferente para forex e alguns índices
+var FH_MAP={
+  // Forex: Finnhub usa OANDA:EUR_USD
+  "EURUSD=X":"OANDA:EUR_USD","GBPUSD=X":"OANDA:GBP_USD","USDJPY=X":"OANDA:USD_JPY",
+  "USDCHF=X":"OANDA:USD_CHF","AUDUSD=X":"OANDA:AUD_USD","USDCAD=X":"OANDA:USD_CAD",
+  "USDBRL=X":"OANDA:USD_BRL","EURGBP=X":"OANDA:EUR_GBP","NZDUSD=X":"OANDA:NZD_USD",
+  "EURJPY=X":"OANDA:EUR_JPY",
+  // Commodities via ETF proxy (commodities puras nao estao no free tier)
+  "GC=F":"GLD","SI=F":"SLV","CL=F":"USO","BZ=F":"BNO",
+  "NG=F":"UNG","HG=F":"CPER","PL=F":"PPLT",
+  // Indices via ETF proxy
+  "^GSPC":"SPY","^IXIC":"QQQ","^DJI":"DIA","^RUT":"IWM",
+  "^VIX":"VIXY","^N225":"EWJ","^FTSE":"EWU","DX-Y.NYB":"UUP","^GDAXI":"EWG"
+};
+
+function fhSym(ticker){return FH_MAP[ticker]||ticker;}
+
 var ASSETS=[
   // CRIPTO — via Binance (CORS aberto, sem rate limit)
   {t:"BTCUSDT",  s:"BTC",   n:"Bitcoin",          c:"crypto", src:"binance"},
@@ -333,7 +351,7 @@ var ASSETS=[
   {t:"APTUSDT",  s:"APT",   n:"Aptos",             c:"crypto", src:"binance"},
   {t:"ARBUSDT",  s:"ARB",   n:"Arbitrum",          c:"crypto", src:"binance"},
   {t:"OPUSDT",   s:"OP",    n:"Optimism",          c:"crypto", src:"binance"},
-  // ACOES — via Yahoo Finance
+  // ACOES — ações US funcionam diretamente no TD
   {t:"AAPL",  s:"AAPL",  n:"Apple",            c:"stocks", src:"td"},
   {t:"MSFT",  s:"MSFT",  n:"Microsoft",        c:"stocks", src:"td"},
   {t:"GOOGL", s:"GOOGL", n:"Alphabet",         c:"stocks", src:"td"},
@@ -374,7 +392,7 @@ var ASSETS=[
   {t:"MRNA",  s:"MRNA",  n:"Moderna",          c:"stocks", src:"td"},
   {t:"WMT",   s:"WMT",   n:"Walmart",          c:"stocks", src:"td"},
   {t:"MCD",   s:"MCD",   n:"McDonald's",       c:"stocks", src:"td"},
-  // FOREX
+  // FOREX — símbolo interno mantido, fhSym() converte
   {t:"EURUSD=X",s:"EURUSD",n:"EUR/USD",c:"forex",src:"td"},
   {t:"GBPUSD=X",s:"GBPUSD",n:"GBP/USD",c:"forex",src:"td"},
   {t:"USDJPY=X",s:"USDJPY",n:"USD/JPY",c:"forex",src:"td"},
@@ -740,105 +758,181 @@ function fetchBinance(symbol, cb){
 }
 
 // ============================================================
-// FETCH: V18i
-// Quotes  → Finnhub /quote (CORS OK, 60/min, retorna preço+%)
-// OHLC    → Massive /range/1/hour (Bearer auth, CORS OK)
-// Fallback→ Twelve Data se ambos falharem
-// Estrutura: igual V18a que funcionava — só troca as fontes
+// FETCH: TWELVE DATA — V18d
+//
+// ARQUITETURA FINAL (ChatGPT + diagnóstico):
+//
+//  BOOT — só 2 coisas:
+//    1. Placeholder imediato → todos os cards aparecem
+//    2. /quote serial (5s timeout) → preço+% reais
+//    ZERO OHLC no boot. ZERO tfs.forEach. ZERO pending.
+//
+//  SOB DEMANDA — ao abrir card ou tocar em botão:
+//    → /time_series 1h × 500 → resample → todos TFs
+//
 // ============================================================
-var FH_KEY ="d7vmou1r01qj3ct7kqk0d7vmou1r01qj3ct7kqkg";
-var MS_KEY ="3RpgYneJ9Ihjrmd7A50gXQTMwcCFlHie";
-var TD_KEY ="6bda155db82a405fb1c85fbb55551ea1";
-
+// ============================================================
+// FETCH: MULTI-SOURCE — V18h
+//
+// Cada categoria usa a melhor fonte disponível sem CORS:
+//  US Stocks/ETFs → Finnhub (60 req/min, funciona bem)
+//  Forex         → FX Rates API (gratuito, sem CORS, sem key)
+//  Commodities   → Finnhub via ETF proxy (igual V18h)
+//  Índices       → Finnhub via ETF proxy (igual V18h)
+//
+//  OHLC histórico (sob demanda) → Finnhub para todos
+//
+// ============================================================
+// ============================================================
+// WORKER URL — proxy Cloudflare que resolve CORS
+// ============================================================
+var WORKER="https://tradealert-proxy.nfchagas.workers.dev";
 var OHLC_FULL={};
+var OHLC_PEND={};
 
-// Finnhub quote — preço + % do dia
-function fetchTDquote(sym,cb){
-  var xhr=new XMLHttpRequest();
-  xhr.open("GET","https://finnhub.io/api/v1/quote?symbol="+encodeURIComponent(sym)+"&token="+FH_KEY);
-  xhr.timeout=6000;
-  xhr.onload=function(){
+// Mapa de símbolos para Finnhub
+var FH_MAP={
+  "EURUSD=X":"OANDA:EUR_USD","GBPUSD=X":"OANDA:GBP_USD","USDJPY=X":"OANDA:USD_JPY",
+  "USDCHF=X":"OANDA:USD_CHF","AUDUSD=X":"OANDA:AUD_USD","USDCAD=X":"OANDA:USD_CAD",
+  "USDBRL=X":"OANDA:USD_BRL","EURGBP=X":"OANDA:EUR_GBP","NZDUSD=X":"OANDA:NZD_USD",
+  "EURJPY=X":"OANDA:EUR_JPY",
+  "GC=F":"GLD","SI=F":"SLV","CL=F":"USO","BZ=F":"BNO",
+  "NG=F":"UNG","HG=F":"CPER","PL=F":"PPLT",
+  "^GSPC":"SPY","^IXIC":"QQQ","^DJI":"DIA","^RUT":"IWM",
+  "^VIX":"VIXY","^N225":"EWJ","^FTSE":"EWU","DX-Y.NYB":"UUP","^GDAXI":"EWG"
+};
+function fhSym(ticker){return FH_MAP[ticker]||ticker;}
+
+// Stooq map para índices
+var STOOQ_MAP={
+  "^GSPC":"^spx","^IXIC":"^ndq","^DJI":"^dji","^RUT":"^rut",
+  "^VIX":"^vix","^N225":"^nkx","^FTSE":"^ukx","^GDAXI":"^dax"
+};
+
+// Forex map
+var FOREX_MAP2={
+  "EURUSD=X":["EUR","USD"],"GBPUSD=X":["GBP","USD"],"USDJPY=X":["USD","JPY"],
+  "USDCHF=X":["USD","CHF"],"AUDUSD=X":["AUD","USD"],"USDCAD=X":["USD","CAD"],
+  "USDBRL=X":["USD","BRL"],"EURGBP=X":["EUR","GBP"],"NZDUSD=X":["NZD","USD"],
+  "EURJPY=X":["EUR","JPY"]
+};
+
+// ============================================================
+// FETCH via Worker — resolve CORS, esconde API keys
+// Todas as requests passam por:
+// https://tradealert-proxy.nfchagas.workers.dev
+// ============================================================
+
+// Fetch genérico via Worker
+function workerFetch(params, cb, isText){
+  var qs = Object.keys(params).map(function(k){
+    return encodeURIComponent(k)+"="+encodeURIComponent(params[k]);
+  }).join("&");
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", WORKER+"/?"+qs);
+  xhr.timeout = 12000;
+  xhr.onload = function(){
     if(xhr.status===200){
       try{
-        var d=JSON.parse(xhr.responseText);
-        if(!d.c||d.c===0){cb(null);return;}
-        cb({price:d.c,changePct:d.dp||((d.c-d.pc)/d.pc*100),priceOnly:true});
+        if(isText){cb(xhr.responseText);return;}
+        var d = JSON.parse(xhr.responseText);
+        cb(d);
       }catch(e){cb(null);}
     }else{cb(null);}
   };
-  xhr.onerror=xhr.ontimeout=function(){cb(null);};
+  xhr.onerror = xhr.ontimeout = function(){cb(null);};
   xhr.send();
 }
 
-// Massive OHLC horário (Bearer auth)
-function fetchTDohlc(sym,cb){
-  // Índices, forex, commodities: Massive não suporta — usa TD
-  if(sym.indexOf("=X")>=0||sym.indexOf("^")>=0||sym.indexOf("=F")>=0||sym==="DX-Y.NYB"){
-    fetchTDohlcTD(sym,cb);return;
+// Quote universal — usa Worker para todos os tipos
+function fetchQuote(ticker, cb){
+  var cat=null, i;
+  for(i=0;i<ASSETS.length;i++)if(ASSETS[i].t===ticker){cat=ASSETS[i].c;break;}
+
+  if(cat==="forex"){
+    // Forex via Worker (er-api)
+    var pair=FOREX_MAP2[ticker];
+    if(!pair){cb(null);return;}
+    workerFetch({type:"forex",sym:ticker},function(d){
+      if(!d||!d.rates){cb(null);return;}
+      var price=d.rates[pair[1]];
+      if(!price){cb(null);return;}
+      cb({price:price,changePct:0,priceOnly:true});
+    });
+    return;
   }
-  var to=new Date().toISOString().slice(0,10);
-  var from=new Date(Date.now()-90*24*3600*1000).toISOString().slice(0,10);
-  var xhr=new XMLHttpRequest();
-  xhr.open("GET","https://api.massive.com/v2/aggs/ticker/"+encodeURIComponent(sym)+
-           "/range/1/hour/"+from+"/"+to+"?adjusted=true&sort=asc&limit=500");
-  xhr.setRequestHeader("Authorization","Bearer "+MS_KEY);
-  xhr.timeout=15000;
-  xhr.onload=function(){
-    if(xhr.status===200){
-      try{
-        var d=JSON.parse(xhr.responseText);
-        if(!d.results||d.results.length<10){fetchTDohlcTD(sym,cb);return;}
-        var closes=d.results.map(function(v){return v.c;});
-        var highs =d.results.map(function(v){return v.h||v.c;});
-        var lows  =d.results.map(function(v){return v.l||v.c;});
-        var vols  =d.results.map(function(v){return v.v||0;});
-        var last=closes[closes.length-1],prev=closes[closes.length-2]||last;
-        OHLC_FULL[sym]=true;
-        cb({closes:closes,highs:highs,lows:lows,vols:vols,
-            price:last,changePct:(last-prev)/prev*100});
-      }catch(e){fetchTDohlcTD(sym,cb);}
-    }else{fetchTDohlcTD(sym,cb);}
-  };
-  xhr.onerror=xhr.ontimeout=function(){fetchTDohlcTD(sym,cb);};
-  xhr.send();
-}
 
-// Twelve Data OHLC — fallback para Massive + fonte para forex/índices
-function fetchTDohlcTD(sym,cb){
-  var xhr=new XMLHttpRequest();
-  var url="https://api.twelvedata.com/time_series?symbol="+encodeURIComponent(sym)+
-          "&interval=1h&outputsize=500&apikey="+TD_KEY;
-  xhr.open("GET",url);xhr.timeout=15000;
-  xhr.onload=function(){
-    if(xhr.status===200){
+  if(cat==="indices"){
+    // Índices via Worker (stooq)
+    var stSym=STOOQ_MAP[ticker]||ticker.toLowerCase();
+    workerFetch({type:"stooq",sym:stSym},function(text){
+      if(!text){cb(null);return;}
       try{
-        var d=JSON.parse(xhr.responseText);
-        if(d.status==="error"||!d.values||d.values.length<10){cb(null);return;}
-        var vals=d.values.slice().reverse();
-        var closes=vals.map(function(v){return parseFloat(v.close);});
-        var highs =vals.map(function(v){return parseFloat(v.high||v.close);});
-        var lows  =vals.map(function(v){return parseFloat(v.low||v.close);});
-        var vols  =vals.map(function(v){return parseFloat(v.volume||0);});
-        var last=closes[closes.length-1],prev=closes[closes.length-2]||last;
-        cb({closes:closes,highs:highs,lows:lows,vols:vols,
-            price:last,changePct:(last-prev)/prev*100});
+        var lines=text.trim().split("\n");
+        if(lines.length<2){cb(null);return;}
+        var parts=lines[1].split(",");
+        var close=parseFloat(parts[6]);
+        var open=parseFloat(parts[3]);
+        if(!close||close===0){cb(null);return;}
+        cb({price:close,changePct:open>0?(close-open)/open*100:0,priceOnly:true});
       }catch(e){cb(null);}
-    }else{cb(null);}
-  };
-  xhr.onerror=xhr.ontimeout=function(){cb(null);};
-  xhr.send();
+    },true);
+    return;
+  }
+
+  // Ações e ETFs via Worker (Finnhub quote)
+  var fs = fhSym(ticker);
+  workerFetch({type:"quote",sym:fs},function(d){
+    if(!d||!d.c||d.c===0){cb(null);return;}
+    cb({price:d.c,changePct:d.dp||((d.c-d.pc)/d.pc*100),priceOnly:true});
+  });
+}
+
+// OHLC histórico via Worker (Finnhub candles 1H)
+function fetchOHLC1h(ticker, cb){
+  var fs = fhSym(ticker);
+  workerFetch({type:"candle",sym:fs},function(d){
+    if(!d||d.s==="no_data"||!d.c||d.c.length<10){cb(null);return;}
+    var closes=d.c,highs=d.h,lows=d.l,vols=d.v||[];
+    var last=closes[closes.length-1],prev=closes[closes.length-2]||last;
+    cb({closes:closes,highs:highs,lows:lows,vols:vols,
+        price:last,changePct:(last-prev)/prev*100});
+  });
+}
+
+// SOB DEMANDA — ao abrir detalhe ou tocar no botão do card
+function loadOnDemand(ticker,cb){
+  var asset=null,i;
+  for(i=0;i<ASSETS.length;i++)if(ASSETS[i].t===ticker){asset=ASSETS[i];break;}
+  if(!asset||asset.src!=="td"){if(cb)cb();return;}
+  if(OHLC_FULL[ticker]){if(cb)cb();return;}
+  if(OHLC_PEND[ticker]){if(cb)cb();return;}
+  OHLC_PEND[ticker]=true;
+  renderMkt();
+  fetchOHLC1h(ticker,function(d){
+    if(d){PD[ticker]=d;OHLC_FULL[ticker]=true;}
+    delete OHLC_PEND[ticker];
+    renderMkt();updateTicker();
+    if(cb)cb();
+  });
 }
 
 // ============================================================
-// UPDATE — Binance paralelo + Finnhub quotes + Massive OHLC
-// Estrutura 100% igual V18a (que carregava metade das ações)
+// PROGRESS BAR
 // ============================================================
-function setProg(pct,lbl){
+function setProg(pct){
   var b=document.getElementById("prog"),bar=document.getElementById("prog-b");
   if(pct<=0||pct>=100){b.classList.remove("on");return;}
   b.classList.add("on");bar.style.width=pct+"%";
 }
 
+// ============================================================
+// doUpdate — V18d: BOOT MÍNIMO
+// Fase 0: placeholders → todos os cards aparecem AGORA
+// Fase 1: Binance paralelo (cripto) — igual a sempre
+// Fase 2: TD /quote serial, 1 ativo / 300ms — só preço+%
+// OHLC: ZERO no boot. 100% sob demanda.
+// ============================================================
 function doUpdate(){
   if(busy)return;
   busy=true;
@@ -848,81 +942,64 @@ function doUpdate(){
   var binanceA=ASSETS.filter(function(a){return a.src==="binance";});
   var tdA     =ASSETS.filter(function(a){return a.src==="td";});
 
-  // FASE 0: placeholder imediato — card nunca some
+  // ── FASE 0: TODOS os cards aparecem com placeholder ANTES de qualquer request ──
   var i;
-  for(i=0;i<tdA.length;i++){
-    if(!PD[tdA[i].t])PD[tdA[i].t]={price:0,changePct:0,priceOnly:true};
+  for(i=0;i<ASSETS.length;i++){
+    if(!PD[ASSETS[i].t])PD[ASSETS[i].t]={price:0,changePct:0,priceOnly:true};
   }
-  renderMkt();
+  renderMkt(); // UI completa e imediata — zero requests feitos aqui
 
-  // BINANCE: paralelo lotes de 8
+  // ── BINANCE: paralelo lotes de 8 (funciona, não muda) ──
   var bQueue=binanceA.slice();
   function nextBinance(){
     if(!bQueue.length)return;
-    var batch=bQueue.splice(0,8),waiting=batch.length;
-    batch.forEach(function(asset){
-      fetchBinance(asset.t,function(d){
-        if(d)PD[asset.t]=d;
-        if(--waiting===0){renderMkt();updateTicker();if(bQueue.length)setTimeout(nextBinance,300);}
+    var batch=bQueue.splice(0,8),w=batch.length;
+    batch.forEach(function(a){
+      fetchBinance(a.t,function(d){
+        if(d)PD[a.t]=d;
+        if(--w===0){renderMkt();updateTicker();if(bQueue.length)setTimeout(nextBinance,300);}
       });
     });
   }
   nextBinance();
 
-  // FASE 1: Finnhub quotes serial — favoritos primeiro
+  // ── FASE 2: TD /quote serial — favoritos primeiro ──
+  // 1 request por vez, 300ms entre eles
+  // Falhou = não importa, card já existe com placeholder
   var tdPrio=[].concat(
     tdA.filter(function(a){return WL.indexOf(a.t)>=0;}),
     tdA.filter(function(a){return WL.indexOf(a.t)<0;})
   );
-  var qIdx=0,quotesDone=0;
+  var qIdx=0,qDone=0;
 
   function nextQuote(){
     if(qIdx>=tdPrio.length){
+      // Quotes terminaram — boot concluído
       renderMkt();updateTicker();
-      setProg(40);
-      startOHLC();
+      finish();
       return;
     }
     var asset=tdPrio[qIdx++];
-    fetchTDquote(asset.t,function(d){
+    // Pula se já tem OHLC real (carregado sob demanda antes do boot)
+    if(OHLC_FULL[asset.t]){qDone++;setTimeout(nextQuote,0);return;}
+    fetchQuote(asset.t,function(d){
       if(d){
-        if(!PD[asset.t]||PD[asset.t].priceOnly){PD[asset.t]=d;}
-        else{PD[asset.t].price=d.price;PD[asset.t].changePct=d.changePct;}
+        // Atualiza preço sem destruir OHLC caso já exista
+        if(!PD[asset.t]||PD[asset.t].priceOnly){
+          PD[asset.t]=d;
+        }else{
+          PD[asset.t].price=d.price;
+          PD[asset.t].changePct=d.changePct;
+        }
       }
-      // card permanece mesmo se falhar (placeholder da Fase 0)
-      quotesDone++;
-      if(quotesDone%5===0)renderMkt();
-      setProg(5+quotesDone/tdPrio.length*35);
-      setTimeout(nextQuote,1000); // 1s entre quotes — Finnhub 60/min
+      // Card continua mesmo se d===null (placeholder da Fase 0)
+      qDone++;
+      if(qDone%5===0||qDone===tdPrio.length){renderMkt();updateTicker();}
+      setProg(5+qDone/tdPrio.length*93);
+      setTimeout(nextQuote,1000);
     });
   }
   nextQuote();
-
-  // FASE 2: Massive OHLC em background — 1 ativo por vez
-  function startOHLC(){
-    var ohlcQueue=[].concat(
-      tdPrio.filter(function(a){return WL.indexOf(a.t)>=0;}),
-      tdPrio.filter(function(a){return WL.indexOf(a.t)<0;})
-    );
-    var oIdx=0,ohlcDone=0;
-
-    function nextOHLC(){
-      if(oIdx>=ohlcQueue.length){finish();return;}
-      var asset=ohlcQueue[oIdx++];
-      if(OHLC_FULL[asset.t]){
-        ohlcDone++;setProg(40+ohlcDone/ohlcQueue.length*58);
-        setTimeout(nextOHLC,50);return;
-      }
-      fetchTDohlc(asset.t,function(d){
-        if(d)PD[asset.t]=d;
-        ohlcDone++;
-        renderMkt();updateTicker();
-        setProg(40+ohlcDone/ohlcQueue.length*58);
-        setTimeout(nextOHLC,1200);
-      });
-    }
-    nextOHLC();
-  }
 
   function finish(){
     setProg(0);busy=false;
@@ -931,18 +1008,25 @@ function doUpdate(){
       new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
     renderMkt();updateTicker();
     if(detTk)renderDet(detTk);
+    // Auto-carregar OHLC em background para todos os TD assets
+    // Serial lento (2s entre cada) para não estourar rate limit
+    setTimeout(function(){autoLoadOHLC(tdA.slice());},3000);
   }
 }
 
-// Carrega OHLC sob demanda ao abrir detalhe
-function loadOHLConDemand(ticker,cb){
-  var asset=null,i;for(i=0;i<ASSETS.length;i++)if(ASSETS[i].t===ticker){asset=ASSETS[i];break;}
-  if(!asset||asset.src!=="td"){if(cb)cb();return;}
-  if(OHLC_FULL[ticker]){if(cb)cb();return;}
-  fetchTDohlc(ticker,function(d){
-    if(d)PD[ticker]=d;
-    renderMkt();
-    if(cb)cb();
+// Carrega OHLC em background serial — pentagramas aparecem progressivamente
+function autoLoadOHLC(queue){
+  if(!queue||!queue.length)return;
+  var asset=queue.shift();
+  if(OHLC_FULL[asset.t]){autoLoadOHLC(queue);return;}
+  if(OHLC_PEND[asset.t]){setTimeout(function(){autoLoadOHLC(queue);},500);return;}
+  OHLC_PEND[asset.t]=true;
+  fetchOHLC1h(asset.t,function(d){
+    if(d){PD[asset.t]=d;OHLC_FULL[asset.t]=true;}
+    delete OHLC_PEND[asset.t];
+    renderMkt();updateTicker();
+    // 2s entre cada para não sobrecarregar o Worker
+    setTimeout(function(){autoLoadOHLC(queue);},2000);
   });
 }
 
@@ -960,7 +1044,8 @@ function fmt(p,tk){
 }
 
 function getPrimary(ticker){
-  var d=PD[ticker];if(!d||!d.price)return null;return d;
+  // Retorna sempre se existir — price=0 é placeholder válido, não motivo para sumir
+  var d=PD[ticker];if(!d)return null;return d;
 }
 
 function getFiltered(){
@@ -968,7 +1053,8 @@ function getFiltered(){
   var srt=document.getElementById("srt").value||"az";
   var arr=ASSETS.filter(function(a){
     if(q&&a.s.toLowerCase().indexOf(q)<0&&a.n.toLowerCase().indexOf(q)<0)return false;
-    if(curCat!=="all"&&a.c!==curCat)return false;return true;
+    if(curCat!=="all"&&a.c!==curCat)return false;
+    return true; // sempre inclui — card existe mesmo sem dados
   });
   arr.sort(function(a,b){
     if(srt==="az")return a.s<b.s?-1:a.s>b.s?1:0;
@@ -989,15 +1075,27 @@ function getFiltered(){
 
 function cardHTML(asset){
   var data=getPrimary(asset.t);
-  var price=data?fmt(data.price,asset.t):"--";
+  // price=0 significa placeholder (aguardando quote) — mostra "..." em vez de "0.00"
+  var isPlaceholder=data&&data.priceOnly&&data.price===0;
+  var price=!data?"--":isPlaceholder?"...":fmt(data.price,asset.t);
   var chg=data?data.changePct:0;
-  var chgStr=data?(chg>=0?"+":"")+chg.toFixed(2)+"%":"--";
+  var chgStr=!data?"--":isPlaceholder?"...":((chg>=0?"+":"")+chg.toFixed(2)+"%");
   var cls=chg>0?"pos":chg<0?"neg":"neu";
   var watching=WL.indexOf(asset.t)>=0;
   var pentas=computePentas(asset.t);
   var sig=getSignal(pentas);
   var cardCls=sig.isMax?"max-card":sig.dir==="buy"&&sig.strength>0.2?"buy-card":sig.dir==="sell"&&sig.strength>0.2?"sell-card":"";
   var hasData=!!PD[asset.t]&&!!PD[asset.t].closes;
+  var isFullOHLC=OHLC_FULL[asset.t];
+  var isPending=OHLC_PEND[asset.t];
+  var isTD=asset.src==="td";
+  // Botão "sob demanda": aparece assim que o ativo existe (placeholder ou quote)
+  var demandBtn="";
+  if(isTD&&isPending){
+    demandBtn='<div style="margin-top:5px;font-size:7px;color:var(--tx3);font-family:var(--mono)"><span style="display:inline-block;width:6px;height:6px;border:1px solid var(--tx3);border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite;margin-right:4px"></span>Carregando indicadores...</div>';
+  }else if(isTD&&!isFullOHLC&&data){
+    demandBtn='<div style="margin-top:5px"><button onclick="event.stopPropagation();loadOnDemand(\''+asset.t+'\',function(){renderMkt();})" style="background:rgba(0,245,196,.08);border:1px solid rgba(0,245,196,.3);border-radius:5px;color:var(--acc);font-size:7px;font-family:var(--mono);font-weight:700;padding:3px 8px;cursor:pointer">&#9889; Carregar indicadores</button></div>';
+  }
 
   var sleds="";
   for(var k=0;k<PKEYS.length;k++){var st2=sledState(pentas[PKEYS[k]]);sleds+='<div class="sled '+st2+'"><div class="sled-in"></div></div>';}
@@ -1033,6 +1131,7 @@ function cardHTML(asset){
     '<div class="ac-r"><div><div class="ac-p '+cls+'">'+price+'</div><div class="ac-c '+cls+'">'+chgStr+'</div></div>'+
     '<button class="wbtn '+(watching?"on":"")+"\" onclick=\"event.stopPropagation();toggleW('"+asset.t+"')\">"+( watching?"&#11088;":"&#9734;")+'</button></div></div>'+
     (hasAny?'<div class="pentas">'+pentaRow+'</div>':'<div style="font-size:8px;color:var(--tx3);font-family:var(--mono);padding:6px 0">&#8987; Carregando...</div>')+
+    demandBtn+
     volSection+
     '</div></div></div>';
 }
@@ -1096,9 +1195,9 @@ function openDet(ticker){
   document.getElementById("d-sym").textContent=asset.s;
   document.getElementById("d-name").textContent=asset.n;
   renderDet(ticker);document.getElementById("det").classList.add("open");
-  // Se ação ainda sem OHLC, carrega agora
-  if(asset.src==="td"){
-    loadOHLConDemand(ticker,function(){renderDet(ticker);});
+  // SOB DEMANDA: se ação sem OHLC 1h completo, carrega agora
+  if(asset.src==="td"&&!OHLC_FULL[ticker]){
+    loadOnDemand(ticker,function(){renderDet(ticker);});
   }
 }
 
