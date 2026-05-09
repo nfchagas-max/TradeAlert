@@ -828,12 +828,12 @@ function fetchFHquote(sym,cb){
   xhr.send();
 }
 
-// Polygon/Massiv quote — fallback para ações e ETFs
+// Massive quote — fallback para ações e ETFs
 function fetchPGquote(sym,cb){
-  // Só para símbolos simples (ações/ETFs americanos)
   if(sym.indexOf("=X")>=0||sym.indexOf("^")>=0||sym.indexOf("=F")>=0){cb(null);return;}
   var xhr=new XMLHttpRequest();
-  xhr.open("GET","https://api.polygon.io/v2/aggs/ticker/"+encodeURIComponent(sym)+"/prev?adjusted=true&apiKey="+PG_KEY);
+  var today=new Date().toISOString().slice(0,10);
+  xhr.open("GET","https://api.massive.com/v2/aggs/ticker/"+encodeURIComponent(sym)+"/prev?adjusted=true&apiKey="+PG_KEY);
   xhr.timeout=8000;
   xhr.onload=function(){
     if(xhr.status===200){
@@ -852,13 +852,13 @@ function fetchPGquote(sym,cb){
   xhr.send();
 }
 
-// Polygon/Massiv OHLC — fallback para candles sob demanda
+// Massive OHLC horário — para pentagramas sob demanda
 function fetchPG1h(sym,cb){
   if(sym.indexOf("=X")>=0||sym.indexOf("^")>=0||sym.indexOf("=F")>=0){cb(null);return;}
   var to=new Date().toISOString().slice(0,10);
   var from=new Date(Date.now()-90*24*3600*1000).toISOString().slice(0,10);
   var xhr=new XMLHttpRequest();
-  var url="https://api.polygon.io/v2/aggs/ticker/"+encodeURIComponent(sym)+
+  var url="https://api.massive.com/v2/aggs/ticker/"+encodeURIComponent(sym)+
           "/range/1/hour/"+from+"/"+to+"?adjusted=true&sort=asc&limit=500&apiKey="+PG_KEY;
   xhr.open("GET",url);xhr.timeout=15000;
   xhr.onload=function(){
