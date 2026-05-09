@@ -832,8 +832,8 @@ function fetchFHquote(sym,cb){
 function fetchPGquote(sym,cb){
   if(sym.indexOf("=X")>=0||sym.indexOf("^")>=0||sym.indexOf("=F")>=0){cb(null);return;}
   var xhr=new XMLHttpRequest();
-  var today=new Date().toISOString().slice(0,10);
-  xhr.open("GET","https://api.massive.com/v2/aggs/ticker/"+encodeURIComponent(sym)+"/prev?adjusted=true&apiKey="+PG_KEY);
+  xhr.open("GET","https://api.massive.com/v2/aggs/ticker/"+encodeURIComponent(sym)+"/prev?adjusted=true");
+  xhr.setRequestHeader("Authorization","Bearer "+PG_KEY);
   xhr.timeout=8000;
   xhr.onload=function(){
     if(xhr.status===200){
@@ -859,8 +859,10 @@ function fetchPG1h(sym,cb){
   var from=new Date(Date.now()-90*24*3600*1000).toISOString().slice(0,10);
   var xhr=new XMLHttpRequest();
   var url="https://api.massive.com/v2/aggs/ticker/"+encodeURIComponent(sym)+
-          "/range/1/hour/"+from+"/"+to+"?adjusted=true&sort=asc&limit=500&apiKey="+PG_KEY;
-  xhr.open("GET",url);xhr.timeout=15000;
+          "/range/1/hour/"+from+"/"+to+"?adjusted=true&sort=asc&limit=500";
+  xhr.open("GET",url);
+  xhr.setRequestHeader("Authorization","Bearer "+PG_KEY);
+  xhr.timeout=15000;
   xhr.onload=function(){
     if(xhr.status===200){
       try{
