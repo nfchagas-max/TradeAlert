@@ -736,13 +736,19 @@ function mkSVG(penta,color,size){
 // ============================================================
 // VOLUME BARS
 // ============================================================
-function mkVolBars(ticker,tfIdx){
+// Número de barras fixo por TF — evita barras largas no 3D
+var VOL_BARS_COUNT={"1h":60,"4h":42,"12h":30,"1d":20,"3d":20};
+
+function mkVolBars(ticker,tfIdx,showLabel){
   var d=PD[ticker];
   if(!d||!d.vols||!d.vols.length)return'<div style="font-size:7px;color:var(--tx3);font-family:var(--mono)">aguardando volume...</div>';
-  var tfKey=TF_KEYS[tfIdx]||TF_KEYS[TF_KEYS.length-1];
+  var tfKey=TF_KEYS[tfIdx]||TF_KEYS[0];
   var w=getWindow(ticker,tfKey);
-  if(!w||!w.vols||!w.vols.length)return'<div style="font-size:7px;color:var(--tx3);font-family:var(--mono)">sem dados de volume</div>';
+  if(!w||!w.vols||!w.vols.length)return'<div style="font-size:7px;color:var(--tx3);font-family:var(--mono)">sem dados</div>';
   var vols=w.vols,closes=w.closes;
+  // Limita ao número fixo de barras para o TF
+  var nBars=VOL_BARS_COUNT[tfKey]||40;
+  if(vols.length>nBars){vols=vols.slice(vols.length-nBars);closes=closes.slice(closes.length-nBars);}
   var maxV=0,i;for(i=0;i<vols.length;i++)if(vols[i]>maxV)maxV=vols[i];
   if(maxV===0)return"";
   var avgV=0;for(i=0;i<vols.length;i++)avgV+=vols[i];avgV/=vols.length;
@@ -755,7 +761,10 @@ function mkVolBars(ticker,tfIdx){
     var col=isUp?"rgba(0,227,150,"+alpha+")":"rgba(255,69,96,"+alpha+")";
     bars+='<div class="vol-bar" style="height:'+h+'px;background:'+col+'"></div>';
   }
-  return'<div class="vol-bars">'+bars+'</div>';
+  var lbl=showLabel?'<span style="font-size:6px;font-family:var(--mono);color:var(--acc);margin-left:3px">'+TF_LABELS[tfIdx]+'</span>':"";
+  return'<div style="display:flex;align-items:center;gap:2px">'+
+    '<div class="vol-bars" style="flex:1">'+bars+'</div>'+lbl+
+  '</div>';
 }
 
 // ============================================================
@@ -1266,7 +1275,7 @@ function cardHTML(asset){
   var volInline="";
   if(hasData){
     var volIdx=VOL_TF[asset.t]!==undefined?VOL_TF[asset.t]:0;
-    var volBarsHtml=mkVolBars(asset.t,volIdx);
+    var volBarsHtml=mkVolBars(asset.t,volIdx,true); // true = mostra label TF
     volInline='<div style="margin-top:4px;display:flex;align-items:center;gap:6px">'+
       '<span style="font-size:6px;font-family:var(--mono);color:var(--tx3);flex-shrink:0">VOL</span>'+
       '<div style="flex:1">'+volBarsHtml+'</div>'+
@@ -1479,12 +1488,14 @@ function playAlert(){
 // ============================================================
 function openDet(ticker){
   var asset=null,i;for(i=0;i<ASSETS.length;i++)if(ASSETS[i].t===ticker){asset=ASSETS[i];break;}
+  // Busca também em ativos temporários
+  if(!asset){asset=TEMP_ASSETS.find(function(a){return a.t===ticker;})||null;}
   if(!asset)return;detTk=ticker;
   document.getElementById("d-sym").textContent=asset.s;
   document.getElementById("d-name").textContent=asset.n;
   renderDet(ticker);document.getElementById("det").classList.add("open");
-  // SOB DEMANDA: se ação sem OHLC 1h completo, carrega agora
-  if(asset.src==="td"&&!OHLC_FULL[ticker]){
+  // SOB DEMANDA: carrega OHLC se ainda não tem
+  if((asset.src==="td"||asset.custom)&&!OHLC_FULL[ticker]){
     loadOnDemand(ticker,function(){renderDet(ticker);});
   }
 }
