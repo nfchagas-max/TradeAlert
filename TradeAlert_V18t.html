@@ -209,7 +209,7 @@ body{background:var(--bg);color:var(--txt);font-family:var(--disp);min-height:10
   <div class="cat-bar">
     <span class="cf on" onclick="fcat('all',this)">Todos</span>
     <span class="cf"    onclick="fcat('crypto',this)">Cripto</span>
-    <span class="cf"    onclick="fcat('stocks',this)">Acoes</span>
+    <span class="cf"    onclick="fcat('stocks',this)">Ações</span>
     <span class="cf"    onclick="fcat('commodities',this)">Commodities</span>
     <span class="cf"    onclick="fcat('indices',this)">Indices</span>
     <span class="cf"    onclick="fcat('etf',this)">ETFs</span>
@@ -976,15 +976,22 @@ function fetchOHLC1h(ticker, cb){
 function loadOnDemand(ticker,cb){
   var asset=null,i;
   for(i=0;i<ASSETS.length;i++)if(ASSETS[i].t===ticker){asset=ASSETS[i];break;}
-  if(!asset||asset.src!=="td"){if(cb)cb();return;}
+  // Aceita também ativos temporários não registrados em ASSETS
+  if(!asset){
+    var tempA=TEMP_ASSETS.find(function(a){return a.t===ticker;});
+    if(tempA)asset=tempA;
+  }
+  if(!asset){if(cb)cb();return;}
+  // Aceita src:"td" ou custom:true
+  if(asset.src!=="td"&&!asset.custom){if(cb)cb();return;}
   if(OHLC_FULL[ticker]){if(cb)cb();return;}
   if(OHLC_PEND[ticker]){if(cb)cb();return;}
   OHLC_PEND[ticker]=true;
-  renderMkt();
+  renderFav();renderMkt();
   fetchOHLC1h(ticker,function(d){
     if(d){PD[ticker]=d;OHLC_FULL[ticker]=true;}
     delete OHLC_PEND[ticker];
-    renderMkt();updateTicker();
+    renderFav();renderMkt();updateTicker();
     if(cb)cb();
   });
 }
@@ -1220,7 +1227,7 @@ function cardHTML(asset){
   var hasData=!!PD[asset.t]&&!!PD[asset.t].closes;
   var isFullOHLC=OHLC_FULL[asset.t];
   var isPending=OHLC_PEND[asset.t];
-  var isTD=asset.src==="td";
+  var isTD=asset.src==="td"||asset.custom===true;
 
   // LEDs laterais
   var sleds="";
