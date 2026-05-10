@@ -915,47 +915,9 @@ function fetchQuote(ticker, cb){
   });
 }
 
-// OHLC histórico — Worker para ações/ETFs, TD direto para forex/índices
+// OHLC histórico via Worker (type=ohlc — confirmado funcionando)
 function fetchOHLC1h(ticker, cb){
-  var asset=null,i;
-  for(i=0;i<ASSETS.length;i++)if(ASSETS[i].t===ticker){asset=ASSETS[i];break;}
-  var cat=asset?asset.c:"";
-
-  // Forex e índices: Twelve Data direto (Worker/Finnhub não suporta)
-  if(cat==="forex"||cat==="indices"||cat==="commodities"){
-    var tdSym=ticker.replace("=X","").replace("=F","");
-    // Para forex: EURUSD=X → EUR/USD no TD
-    if(cat==="forex"){
-      tdSym=ticker.replace("=X","");
-      tdSym=tdSym.slice(0,3)+"/"+tdSym.slice(3); // EURUSD → EUR/USD
-    }
-    var xhr=new XMLHttpRequest();
-    var url="https://api.twelvedata.com/time_series?symbol="+encodeURIComponent(tdSym)+
-            "&interval=1h&outputsize=500&apikey="+TD_KEY;
-    xhr.open("GET",url);xhr.timeout=15000;
-    xhr.onload=function(){
-      if(xhr.status===200){
-        try{
-          var d=JSON.parse(xhr.responseText);
-          if(d.status==="error"||!d.values||d.values.length<10){cb(null);return;}
-          var vals=d.values.slice().reverse();
-          var closes=vals.map(function(v){return parseFloat(v.close);});
-          var highs =vals.map(function(v){return parseFloat(v.high||v.close);});
-          var lows  =vals.map(function(v){return parseFloat(v.low||v.close);});
-          var vols  =vals.map(function(v){return parseFloat(v.volume||0);});
-          var last=closes[closes.length-1],prev=closes[closes.length-2]||last;
-          cb({closes:closes,highs:highs,lows:lows,vols:vols,
-              price:last,changePct:(last-prev)/prev*100});
-        }catch(e){cb(null);}
-      }else{cb(null);}
-    };
-    xhr.onerror=xhr.ontimeout=function(){cb(null);};
-    xhr.send();
-    return;
-  }
-
-  // Ações e ETFs: via Worker (type=ohlc)
-  var fs=fhSym(ticker);
+  var fs = fhSym(ticker);
   workerFetch({type:"ohlc",sym:fs},function(d){
     if(!d||!d.c||d.c.length<10){cb(null);return;}
     var closes=d.c,highs=d.h||d.c,lows=d.l||d.c,vols=d.v||[];
