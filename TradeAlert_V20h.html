@@ -1456,6 +1456,26 @@ function cardHTML(asset){
   for(var k=0;k<PKEYS.length;k++){var st2=sledState(pentas[PKEYS[k]]);sleds+='<div class="sled '+st2+'"><div class="sled-in"></div></div>';}
 
   // 5 pentagramas mini — sempre visíveis, minimizados
+  // Botões de reload — gerados fora do loop, exibidos acima dos pentagramas
+  var tfBtns="";
+  if(hasData||asset.src==="binance"){
+    tfBtns='<div style="display:flex;gap:3px;margin-top:5px;margin-bottom:5px;justify-content:center;flex-wrap:wrap">';
+    for(var vi=0;vi<TF_KEYS.length;vi++){
+      var tfK=TF_KEYS[vi];
+      var tfPk=asset.t+"|"+tfK;
+      var loading=TF_PEND[tfPk];
+      var hasTF=!!(PD[asset.t]&&PD[asset.t][tfK]);
+      tfBtns+='<button onclick="event.stopPropagation();reloadTF(\''+asset.t+'\',\''+tfK+'\')" '+
+        'style="background:'+(loading?"rgba(255,181,71,.2)":hasTF?"rgba(0,245,196,.1)":"rgba(255,255,255,.06)")+';'+
+        'border:1px solid '+(loading?"var(--yel)":hasTF?"rgba(0,245,196,.4)":"rgba(255,255,255,.2)")+';'+
+        'border-radius:5px;color:'+(loading?"var(--yel)":hasTF?"var(--acc)":"var(--tx2)")+';'+
+        'font-size:9px;font-family:var(--mono);font-weight:700;'+
+        'min-width:32px;height:28px;padding:0 6px;cursor:pointer;line-height:1">'+
+        (loading?"⏳":TF_LABELS[vi])+'</button>';
+    }
+    tfBtns+='</div>';
+  }
+
   var pentaRow="";
   for(var k=0;k<PKEYS.length;k++){
     var p=pentas[PKEYS[k]];
@@ -1474,25 +1494,6 @@ function cardHTML(asset){
         '<span style="display:inline-block;width:8px;height:8px;border:1.5px solid var(--tx3);border-top-color:var(--acc);border-radius:50%;animation:spin .8s linear infinite"></span></div>';
     }
 
-    // Botões de reload — só no pentagrama BB (k===0), fora do SVG, abaixo do sinal
-    var tfBtns="";
-    if(k===0&&(hasData||asset.src==="binance")){
-      tfBtns='<div style="display:flex;gap:3px;margin-top:5px;justify-content:center;flex-wrap:wrap">';
-      for(var vi=0;vi<TF_KEYS.length;vi++){
-        var tfK=TF_KEYS[vi];
-        var tfPk=asset.t+"|"+tfK;
-        var loading=TF_PEND[tfPk];
-        var hasTF=!!(PD[asset.t]&&PD[asset.t][tfK]);
-        tfBtns+='<button onclick="event.stopPropagation();reloadTF(\''+asset.t+'\',\''+tfK+'\')" '+
-          'style="background:'+(loading?"rgba(255,181,71,.2)":hasTF?"rgba(0,245,196,.1)":"rgba(255,255,255,.06)")+';'+
-          'border:1px solid '+(loading?"var(--yel)":hasTF?"rgba(0,245,196,.4)":"rgba(255,255,255,.2)")+';'+
-          'border-radius:5px;color:'+(loading?"var(--yel)":hasTF?"var(--acc)":"var(--tx2)")+';'+
-          'font-size:9px;font-family:var(--mono);font-weight:700;'+
-          'min-width:32px;height:26px;padding:0 6px;cursor:pointer;line-height:1">'+
-          (loading?"⏳":TF_LABELS[vi])+'</button>';
-      }
-      tfBtns+='</div>';
-    }
 
     pentaRow+='<div class="pw" style="position:relative">'+
       '<div class="pw-nm" style="color:'+PCOLORS[k]+';font-size:7px;margin-bottom:2px">'+PNAMES[k]+'</div>'+
