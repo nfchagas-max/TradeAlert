@@ -219,7 +219,7 @@ body{background:var(--bg);color:var(--txt);font-family:var(--disp);min-height:10
   <div class="ctrl">
     <input class="si" type="text" placeholder="Buscar ativo..." id="si" oninput="renderMkt()">
     <select class="ss" id="srt" onchange="renderMkt()">
-      <option value="az">A-Z</option>
+      <option value="az" selected>A-Z</option>
       <option value="za">Z-A</option>
       <option value="sig">Força</option>
       <option value="chg-d">Alta%</option>
@@ -1585,28 +1585,61 @@ function searchCustomAsset(){
     return;
   }
 
-  // Tenta buscar via Worker (Finnhub quote)
-  workerFetch({type:"quote",sym:sym},function(d){
-    if(!d||!d.c||d.c===0){
-      res.innerHTML='<div style="font-size:9px;color:var(--red);font-family:var(--mono)">&#10005; Ativo "'+sym+'" não encontrado. Verifique o símbolo.</div>';
-      return;
-    }
-    var price=d.c,chg=d.dp||0;
-    // Monta ativo temporário
-    var newAsset={t:sym,s:sym,n:sym,c:"stocks",src:"td"};
-    {var _e=PD[sym]||{};_e._q={price:price,changePct:chg};PD[sym]=_e;};
+  // Tenta buscar em múltiplas fontes
+  // 1. Finnhub (ações, ETFs)
+  // 2. Binance (cripto — adiciona USDT)
+  // 3. CoinGecko (cripto pelo nome)
+  function tryFinnhub(){
+    workerFetch({type:"quote",sym:sym},function(d){
+      if(d&&d.c&&d.c>0){
+        showResult(d.c,d.dp||0,"stocks","td");
+      }else{
+        tryBinance();
+      }
+    });
+  }
 
-    // Mostra resultado com os dois botões
+  function tryBinance(){
+    // Tenta como par USDT na Binance
+    var bsym=sym+"USDT";
+    var xhr=new XMLHttpRequest();
+    xhr.open("GET","https://api.binance.com/api/v3/ticker/24hr?symbol="+bsym);
+    xhr.timeout=6000;
+    xhr.onload=function(){
+      if(xhr.status===200){
+        try{
+          var d=JSON.parse(xhr.responseText);
+          var price=parseFloat(d.lastPrice||0);
+          var chg=parseFloat(d.priceChangePercent||0);
+          if(price>0){showResult(price,chg,"crypto","binance",bsym);return;}
+        }catch(e){}
+      }
+      tryNotFound();
+    };
+    xhr.onerror=xhr.ontimeout=tryNotFound;
+    xhr.send();
+  }
+
+  function tryNotFound(){
+    res.innerHTML='<div style="font-size:9px;color:var(--red);font-family:var(--mono)">&#10005; "'+sym+'" não encontrado. Tente o símbolo exato (ex: QCOM, BTCUSDT, NDX).</div>';
+  }
+
+  function showResult(price,chg,cat,src,bsym){
+    var ticker=bsym||sym;
+    var newAsset={t:ticker,s:sym,n:sym,c:cat,src:src};
+    if(!PD[ticker])PD[ticker]={};
+    PD[ticker]._q={price:price,changePct:chg};
+
     res.innerHTML=
       '<div style="background:var(--crd);border:1px solid var(--bdr);border-radius:8px;padding:10px;margin-top:4px">'+
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
           '<div>'+
             '<div style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--acc)">'+sym+'</div>'+
-            '<div style="font-size:10px;color:var(--tx2)">Preço encontrado</div>'+
+            '<div style="font-size:10px;color:var(--tx2)">'+cat+' · '+src+'</div>'+
           '</div>'+
           '<div style="text-align:right">'+
             '<div style="font-family:var(--mono);font-size:14px;font-weight:700;color:'+(chg>=0?"var(--grn)":"var(--red)")+'">'+
-              price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})+
+              price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:6})+
             '</div>'+
             '<div style="font-family:var(--mono);font-size:10px;color:'+(chg>=0?"var(--grn)":"var(--red)")+'">'+
               (chg>=0?"+":"")+chg.toFixed(2)+"%"+
@@ -1614,51 +1647,55 @@ function searchCustomAsset(){
           '</div>'+
         '</div>'+
         '<div style="display:flex;gap:6px">'+
-          '<button onclick="addTempAsset(\''+sym+'\')" '+
+          '<button onclick="addTempAsset(\''+ticker+'\',\''+sym+'\',\''+cat+'\',\''+src+'\')" '+
             'style="flex:1;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;'+
             'color:var(--tx2);font-family:var(--mono);font-size:9px;font-weight:700;padding:7px;cursor:pointer">'+
             '&#9200; Só agora<br><span style="font-size:7px;color:var(--tx3)">Some ao fechar</span>'+
           '</button>'+
-          '<button onclick="addPermAsset(\''+sym+'\','+price+','+chg+')" '+
+          '<button onclick="addPermAsset(\''+ticker+'\',\''+sym+'\','+price+','+chg+',\''+cat+'\',\''+src+'\')" '+
             'style="flex:1;background:rgba(0,245,196,.1);border:1px solid rgba(0,245,196,.3);border-radius:6px;'+
             'color:var(--acc);font-family:var(--mono);font-size:9px;font-weight:700;padding:7px;cursor:pointer">'+
             '&#11088; Salvar permanente<br><span style="font-size:7px;color:var(--tx3)">Entra na lista</span>'+
           '</button>'+
         '</div>'+
       '</div>';
-  });
+  }
+
+  tryFinnhub();
 }
 
-function addTempAsset(sym){
-  var newAsset={t:sym,s:sym,n:sym,c:"stocks",src:"td"};
-  // Adiciona em TEMP e em WL (favoritos)
-  var exists=TEMP_ASSETS.some(function(a){return a.t===sym;});
+
+function addTempAsset(ticker,sym,cat,src){
+  sym=sym||ticker;cat=cat||"stocks";src=src||"td";
+  var newAsset={t:ticker,s:sym,n:sym,c:cat,src:src};
+  var exists=TEMP_ASSETS.some(function(a){return a.t===ticker;});
   if(!exists)TEMP_ASSETS.push(newAsset);
-  if(WL.indexOf(sym)<0)WL.push(sym);
+  if(WL.indexOf(ticker)<0)WL.push(ticker);
+  localStorage.setItem("wl20h",JSON.stringify(WL));
   document.getElementById("fav-search-result").innerHTML=
     '<div style="font-size:9px;color:var(--grn);font-family:var(--mono)">&#10003; '+sym+' adicionado temporariamente!</div>';
   document.getElementById("fav-search").value="";
   renderFav();
-  // Carrega OHLC em background
-  setTimeout(function(){loadOnDemand(sym,function(){renderFav();});},500);
+  setTimeout(function(){loadOnDemand(ticker,function(){renderFav();});},500);
 }
 
-function addPermAsset(sym,price,chg){
-  var newAsset={t:sym,s:sym,n:sym,c:"stocks",src:"td"};
-  // Adiciona em ASSETS permanentemente
-  var exists=ASSETS.some(function(a){return a.t===sym;});
+function addPermAsset(ticker,sym,price,chg,cat,src){
+  sym=sym||ticker;cat=cat||"stocks";src=src||"td";
+  var newAsset={t:ticker,s:sym,n:sym,c:cat,src:src,custom:true};
+  var exists=ASSETS.some(function(a){return a.t===ticker;});
   if(!exists){
     ASSETS.push(newAsset);
     PERM_ASSETS.push(newAsset);
     localStorage.setItem("perm20h",JSON.stringify(PERM_ASSETS));
   }
-  {var _e=PD[sym]||{};_e._q={price:price,changePct:chg};PD[sym]=_e;};
-  if(WL.indexOf(sym)<0){WL.push(sym);localStorage.setItem("wl20h",JSON.stringify(WL));}
+  if(!PD[ticker])PD[ticker]={};
+  PD[ticker]._q={price:price,changePct:chg};
+  if(WL.indexOf(ticker)<0){WL.push(ticker);localStorage.setItem("wl20h",JSON.stringify(WL));}
   document.getElementById("fav-search-result").innerHTML=
-    '<div style="font-size:9px;color:var(--acc);font-family:var(--mono)">&#10003; '+sym+' salvo permanentemente na lista!</div>';
+    '<div style="font-size:9px;color:var(--acc);font-family:var(--mono)">&#10003; '+sym+' salvo permanentemente!</div>';
   document.getElementById("fav-search").value="";
   renderFav();renderMkt();
-  setTimeout(function(){loadOnDemand(sym,function(){renderFav();renderMkt();});},500);
+  setTimeout(function(){loadOnDemand(ticker,function(){renderFav();renderMkt();});},500);
 }
 
 function renderFav(){
