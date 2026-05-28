@@ -482,6 +482,7 @@ var ST=JSON.parse(localStorage.getItem("st20h")||JSON.stringify({
   sound:true,interval:120,sqz:true,sqzsound:true,sqzVol:3
 }));
 var TKSYMS=JSON.parse(localStorage.getItem("tks20")||'["BTC","ETH","GOLD","SPY","NDX","DXY"]');
+var HIDDEN_ASSETS=JSON.parse(localStorage.getItem("hidden21")||"[]");
 var curCat="all",curTab="mkt";
 var timer=null,busy=false,detTk=null;
 var VOL_TF={};
@@ -1401,9 +1402,10 @@ function getFiltered(){
   var q=(document.getElementById("si").value||"").toLowerCase();
   var srt=document.getElementById("srt").value||"az";
   var arr=ASSETS.filter(function(a){
+    if(HIDDEN_ASSETS.indexOf(a.t)>=0)return false; // oculto pelo usuário
     if(q&&a.s.toLowerCase().indexOf(q)<0&&a.n.toLowerCase().indexOf(q)<0)return false;
     if(curCat!=="all"&&a.c!==curCat)return false;
-    return true; // sempre inclui — card existe mesmo sem dados
+    return true;
   });
   arr.sort(function(a,b){
     if(srt==="az")return a.s<b.s?-1:a.s>b.s?1:0;
@@ -1596,69 +1598,107 @@ function searchCustomAsset(){
   if(!sym)return;
   var res=document.getElementById("fav-search-result");
 
-  // Verifica limite
-  var totalCustom=TEMP_ASSETS.length+PERM_ASSETS.length;
-  if(totalCustom>=MAX_CUSTOM){
-    res.innerHTML='<div style="font-size:9px;color:var(--red);font-family:var(--mono)">&#9888; Limite de '+MAX_CUSTOM+' ativos customizados atingido. Remova um antes de adicionar.</div>';
-    return;
-  }
-
-  res.innerHTML='<div style="font-size:9px;color:var(--tx3);font-family:var(--mono)">&#8987; Buscando '+sym+'...</div>';
-
-  // Verifica se já existe na lista
-  var existing=ASSETS.find(function(a){return a.s===sym||a.t===sym;});
-  if(existing){
-    res.innerHTML='<div style="font-size:9px;color:var(--yel);font-family:var(--mono)">'+sym+' já está na lista! Toque na estrela no Mercado.</div>';
-    return;
-  }
-
-  // Tenta buscar via Worker (Finnhub quote)
-  workerFetch({type:"quote",sym:sym},function(d){
-    if(!d||!d.c||d.c===0){
-      res.innerHTML='<div style="font-size:9px;color:var(--red);font-family:var(--mono)">&#10005; Ativo "'+sym+'" não encontrado. Verifique o símbolo.</div>';
-      return;
-    }
-    var price=d.c,chg=d.dp||0;
-    // Monta ativo temporário
-    var newAsset={t:sym,s:sym,n:sym,c:"stocks",src:"td"};
-    {var _e=PD[sym]||{};_e._q={price:price,changePct:chg};PD[sym]=_e;};
-
-    // Mostra resultado com os dois botões
-    res.innerHTML=
-      '<div style="background:var(--crd);border:1px solid var(--bdr);border-radius:8px;padding:10px;margin-top:4px">'+
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'+
-          '<div>'+
-            '<div style="font-family:var(--mono);font-size:14px;font-weight:700;color:var(--acc)">'+sym+'</div>'+
-            '<div style="font-size:10px;color:var(--tx2)">Preço encontrado</div>'+
-          '</div>'+
-          '<div style="text-align:right">'+
-            '<div style="font-family:var(--mono);font-size:14px;font-weight:700;color:'+(chg>=0?"var(--grn)":"var(--red)")+'">'+
-              price.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})+
-            '</div>'+
-            '<div style="font-family:var(--mono);font-size:10px;color:'+(chg>=0?"var(--grn)":"var(--red)")+'">'+
-              (chg>=0?"+":"")+chg.toFixed(2)+"%"+
-            '</div>'+
-          '</div>'+
-        '</div>'+
-        '<div style="display:flex;gap:6px">'+
-          '<button onclick="addTempAsset(\''+sym+'\')" '+
-            'style="flex:1;background:var(--bg3);border:1px solid var(--bdr);border-radius:6px;'+
-            'color:var(--tx2);font-family:var(--mono);font-size:9px;font-weight:700;padding:7px;cursor:pointer">'+
-            '&#9200; Só agora<br><span style="font-size:7px;color:var(--tx3)">Some ao fechar</span>'+
-          '</button>'+
-          '<button onclick="addPermAsset(\''+sym+'\','+price+','+chg+')" '+
-            'style="flex:1;background:rgba(0,245,196,.1);border:1px solid rgba(0,245,196,.3);border-radius:6px;'+
-            'color:var(--acc);font-family:var(--mono);font-size:9px;font-weight:700;padding:7px;cursor:pointer">'+
-            '&#11088; Salvar permanente<br><span style="font-size:7px;color:var(--tx3)">Entra na lista</span>'+
-          '</button>'+
-        '</div>'+
-      '</div>';
+  // Busca dentro da lista de ativos do TradeAlert
+  var found=ASSETS.filter(function(a){
+    return a.s.toUpperCase().indexOf(sym)>=0||
+           a.n.toUpperCase().indexOf(sym)>=0||
+           a.t.toUpperCase().indexOf(sym)>=0;
   });
+
+  if(!found.length){
+    res.innerHTML='<div style="font-size:9px;color:var(--red);font-family:var(--mono)">'+
+      '&#10005; "'+sym+'" não encontrado na base do TradeAlert.<br>'+
+      '<span style="color:var(--tx3)">Busque pelo símbolo ou nome. Ex: AAPL, Apple, BTC, Bitcoin</span></div>';
+    return;
+  }
+
+  // Mostra resultados encontrados
+  var html='<div style="font-size:9px;color:var(--acc);font-family:var(--mono);margin-bottom:6px">'+
+    found.length+' resultado(s) encontrado(s):</div>';
+
+  found.slice(0,10).forEach(function(a){
+    var data=getPrimary(a.t);
+    var price=data&&data.price?fmt(data.price,a.t):"--";
+    var chg=data?data.changePct||0:0;
+    var cls=chg>0?"var(--grn)":chg<0?"var(--red)":"var(--tx2)";
+    var isVisible=HIDDEN_ASSETS.indexOf(a.t)<0;
+    html+='<div style="background:var(--crd);border:1px solid var(--bdr);border-radius:7px;'+
+      'padding:8px 10px;margin-bottom:5px;display:flex;align-items:center;justify-content:space-between">'+
+      '<div>'+
+        '<div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--txt)">'+a.s+'</div>'+
+        '<div style="font-size:9px;color:var(--tx2)">'+a.n+' · '+a.c+'</div>'+
+      '</div>'+
+      '<div style="display:flex;align-items:center;gap:6px">'+
+        '<div style="text-align:right">'+
+          '<div style="font-family:var(--mono);font-size:11px;color:'+cls+'">'+price+'</div>'+
+          '<div style="font-family:var(--mono);font-size:8px;color:'+cls+'">'+(chg>=0?"+":"")+chg.toFixed(2)+'%</div>'+
+        '</div>'+
+        '<button onclick="toggleAssetVisibility(\''+a.t+'\')" '+
+          'style="background:'+(isVisible?"rgba(255,69,96,.1)":"rgba(0,245,196,.1)")+';'+
+          'border:1px solid '+(isVisible?"rgba(255,69,96,.3)":"rgba(0,245,196,.3)")+';'+
+          'border-radius:5px;color:'+(isVisible?"var(--red)":"var(--acc)")+';'+
+          'font-size:8px;font-family:var(--mono);font-weight:700;padding:4px 7px;cursor:pointer">'+
+          (isVisible?"&#128683; Ocultar":"&#10003; Mostrar")+'</button>'+
+        (WL.indexOf(a.t)<0?
+          '<button onclick="toggleW(\''+a.t+'\');renderFav()" '+
+            'style="background:rgba(255,181,71,.1);border:1px solid rgba(255,181,71,.3);'+
+            'border-radius:5px;color:var(--yel);font-size:8px;font-family:var(--mono);font-weight:700;padding:4px 7px;cursor:pointer">'+
+            '&#11088;</button>':
+          '<span style="font-size:8px;color:var(--yel)">&#11088;</span>')+
+      '</div>'+
+    '</div>';
+  });
+
+  if(found.length>10){
+    html+='<div style="font-size:8px;color:var(--tx3);font-family:var(--mono);text-align:center">'+
+      '...e mais '+(found.length-10)+' resultados. Refine a busca.</div>';
+  }
+
+  res.innerHTML=html;
 }
 
-function addTempAsset(sym){
-  var newAsset={t:sym,s:sym,n:sym,c:"stocks",src:"td"};
-  // Adiciona em TEMP e em WL (favoritos)
+function toggleAssetVisibility(ticker){
+  var idx=HIDDEN_ASSETS.indexOf(ticker);
+  if(idx>=0)HIDDEN_ASSETS.splice(idx,1);
+  else HIDDEN_ASSETS.push(ticker);
+  localStorage.setItem("hidden21",JSON.stringify(HIDDEN_ASSETS));
+  renderMkt();
+  // Re-executa a busca para atualizar os botões
+  searchCustomAsset();
+}
+
+function addTempAsset(ticker,sym,cat,src){
+  sym=sym||ticker;cat=cat||"stocks";src=src||"td";
+  var newAsset={t:ticker,s:sym,n:sym,c:cat,src:src};
+  var exists=TEMP_ASSETS.some(function(a){return a.t===ticker;});
+  if(!exists)TEMP_ASSETS.push(newAsset);
+  if(WL.indexOf(ticker)<0)WL.push(ticker);
+  localStorage.setItem("wl21",JSON.stringify(WL));
+  document.getElementById("fav-search-result").innerHTML=
+    '<div style="font-size:9px;color:var(--grn);font-family:var(--mono)">&#10003; '+sym+' adicionado temporariamente!</div>';
+  document.getElementById("fav-search").value="";
+  renderFav();
+  setTimeout(function(){loadOnDemand(ticker,function(){renderFav();});},500);
+}
+
+function addPermAsset(ticker,sym,price,chg,cat,src){
+  sym=sym||ticker;cat=cat||"stocks";src=src||"td";
+  var newAsset={t:ticker,s:sym,n:sym,c:cat,src:src,custom:true};
+  var exists=ASSETS.some(function(a){return a.t===ticker;});
+  if(!exists){
+    ASSETS.push(newAsset);
+    PERM_ASSETS.push(newAsset);
+    localStorage.setItem("perm21",JSON.stringify(PERM_ASSETS));
+  }
+  if(!PD[ticker])PD[ticker]={};
+  PD[ticker]._q={price:price,changePct:chg};
+  if(WL.indexOf(ticker)<0){WL.push(ticker);localStorage.setItem("wl21",JSON.stringify(WL));}
+  document.getElementById("fav-search-result").innerHTML=
+    '<div style="font-size:9px;color:var(--acc);font-family:var(--mono)">&#10003; '+sym+' salvo permanentemente!</div>';
+  document.getElementById("fav-search").value="";
+  renderFav();renderMkt();
+  setTimeout(function(){loadOnDemand(ticker,function(){renderFav();renderMkt();});},500);
+}  // Adiciona em TEMP e em WL (favoritos)
   var exists=TEMP_ASSETS.some(function(a){return a.t===sym;});
   if(!exists)TEMP_ASSETS.push(newAsset);
   if(WL.indexOf(sym)<0)WL.push(sym);
@@ -1670,23 +1710,6 @@ function addTempAsset(sym){
   setTimeout(function(){loadOnDemand(sym,function(){renderFav();});},500);
 }
 
-function addPermAsset(sym,price,chg){
-  var newAsset={t:sym,s:sym,n:sym,c:"stocks",src:"td"};
-  // Adiciona em ASSETS permanentemente
-  var exists=ASSETS.some(function(a){return a.t===sym;});
-  if(!exists){
-    ASSETS.push(newAsset);
-    PERM_ASSETS.push(newAsset);
-    localStorage.setItem("perm20h",JSON.stringify(PERM_ASSETS));
-  }
-  {var _e=PD[sym]||{};_e._q={price:price,changePct:chg};PD[sym]=_e;};
-  if(WL.indexOf(sym)<0){WL.push(sym);localStorage.setItem("wl20h",JSON.stringify(WL));}
-  document.getElementById("fav-search-result").innerHTML=
-    '<div style="font-size:9px;color:var(--acc);font-family:var(--mono)">&#10003; '+sym+' salvo permanentemente na lista!</div>';
-  document.getElementById("fav-search").value="";
-  renderFav();renderMkt();
-  setTimeout(function(){loadOnDemand(sym,function(){renderFav();renderMkt();});},500);
-}
 
 function renderFav(){
   var list=document.getElementById("fav-list");if(!list)return;
